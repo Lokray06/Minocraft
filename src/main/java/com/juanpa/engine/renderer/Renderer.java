@@ -13,7 +13,6 @@ import java.util.Map;
 
 public class Renderer
 {
-	private long windowHandle;
 	// Store loaded ChunkMeshes internally.
 	// The ChunkMesh instances are *created and owned* by the Chunk objects,
 	// and merely referenced here for rendering.
@@ -21,15 +20,16 @@ public class Renderer
 
 	private ShaderProgram defaultShader;
 
-	public Renderer(long windowHandle)
+	public Renderer()
 	{
-		this.windowHandle = windowHandle;
 		this.loadedChunkMeshes = new HashMap<>(); // Initialize the map
 		init();
 	}
 
 	public void init()
 	{
+		//GL11.glEnable(GL11.GL_CULL_FACE);
+		//GL11.glCullFace(GL11.GL_BACK);
 		Skybox.init();
 		GL11.glClearColor(0.02f, 0.0f, 0.1f, 1f);
 		GL11.glEnable(GL11.GL_DEPTH_TEST);
@@ -80,7 +80,7 @@ public class Renderer
 			// Debug.log"Renderer disposed and unregistered mesh for chunk: " + coord);
 		} else
 		{
-			Debug.logWarning("Attempted to dispose unknown ChunkMesh for coord: " + coord);
+			//Debug.logWarning("Attempted to dispose unknown ChunkMesh for coord: " + coord);
 		}
 	}
 

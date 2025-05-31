@@ -123,8 +123,6 @@ public class GameObject
 
 	/**
 	 * Updates all components of this GameObject and its children.
-	 *
-	 * @param deltaTime The time in seconds since the last frame.
 	 */
 	public void onUpdate()
 	{

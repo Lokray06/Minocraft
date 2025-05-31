@@ -2,10 +2,11 @@
 package com.juanpa.engine.world;
 
 import com.juanpa.engine.Debug;
+import com.juanpa.engine.components.Camera;
 import com.juanpa.engine.renderer.Renderer;
 import com.juanpa.engine.world.chunk.Chunk;
 import com.juanpa.engine.world.chunk.ChunkCoord;
-import com.juanpa.engine.world.chunk.ChunkMeshJobResult; // NEW: Import
+import com.juanpa.engine.world.chunk.ChunkMeshJobResult;
 import com.juanpa.game.Game;
 import org.joml.Vector3f;
 import org.joml.Vector3i;
@@ -17,40 +18,47 @@ import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ExecutorService; // NEW: For thread pool
-import java.util.concurrent.Executors; // NEW: For thread pool
-import java.util.List; // For temporary lists in background generation
-import java.util.ArrayList; // For temporary lists in background generation
-import java.util.Collections; // NEW: For shuffling lists
-import java.util.Comparator; // NEW: For sorting lists
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 
 public class World
 {
     // --- Constants ---
     public static final short BLOCK_TYPE_AIR_ID = 0;
     public static final short BLOCK_TYPE_SOLID_ID = 1; // Example solid block ID
+    public static final short BLOCK_TYPE_GRASS_ID = 2; // Add this if not already in Chunk class
+    public static final short BLOCK_TYPE_STONE_ID = 3; // Add this if not already in Chunk class
+
+    private static final int WORLD_MIN_BLOCK_Y = 0;
+    // Calculate based on Chunk.java's generation parameters:
+    // BASE_SEA_LEVEL (60) + HEIGHT_SCALE (80) = 140
+    private static final int WORLD_MAX_BLOCK_Y = 60 + 80; // Should be 140
+
+    // Then, the chunk bounds will be:
+    private static final int WORLD_MIN_CHUNK_Y = WORLD_MIN_BLOCK_Y / Chunk.CHUNK_SIZE; // 0
+    private static final int WORLD_MAX_CHUNK_Y = WORLD_MAX_BLOCK_Y / Chunk.CHUNK_SIZE; // 140 / 16 = 8 (approx)
+                                                                                       // This will ensure chunks from Y=0 to Y=8 are loaded.
 
     // --- Fields ---
     private long seed;
-    private Map<ChunkCoord, Chunk> loadedChunks; // Stores currently active chunks
-    private Renderer renderer; // Reference to your renderer (for GPU upload/removal)
+    private Map<ChunkCoord, Chunk> loadedChunks;
+    private Renderer renderer;
 
-    // Player position (updated by Game/PlayerController, typically floating-point)
     private Vector3f playerPosition;
-
-    // Last known player chunk coordinates, to detect chunk changes and trigger updates
     private ChunkCoord lastPlayerChunkCoord;
 
-    // --- NEW: Chunk Management Queues and Budget ---
-    // Queues for throttling chunk processing
-    private Queue<ChunkCoord> chunksToUnloadQueue; // Chunks to be removed from loadedChunks and disposed
-    private Queue<ChunkCoord> chunksToGenerateQueue; // Chunks whose mesh data needs CPU generation (added by main thread, consumed by worker threads)
-    private Queue<ChunkMeshJobResult> chunksToUploadQueue; // Generated mesh data ready for GPU upload (added by worker threads, consumed by main thread)
-    private Queue<ChunkCoord> chunksToForceUpdateQueue; // Chunks that need immediate regeneration (e.g., block changed by player)
+    private Queue<ChunkCoord> chunksToUnloadQueue;
+    private Queue<ChunkMeshJobResult> chunksToUploadQueue;
+    private Queue<ChunkCoord> chunksToForceUpdateQueue;
+    private Queue<ChunkCoord> chunksToGenerateQueue; // Moved here for logical grouping
 
-    private ExecutorService chunkGenerationThreadPool; // Thread pool for background chunk generation
-    private static final int CHUNKS_PER_FRAME_PROCESS_LIMIT = 24; // How many chunks to process (unload/upload) per update call
-    private static final int CHUNKS_PER_FRAME_GENERATE_LIMIT = 24; // How many generation tasks to submit per update call
+    private ExecutorService chunkGenerationThreadPool;
+    private static final int CHUNKS_PER_FRAME_PROCESS_LIMIT = 24;
+    private static final int CHUNKS_PER_FRAME_GENERATE_LIMIT = 24;
 
     // ----------------------//
     // ---- Constructor ----//
@@ -64,14 +72,11 @@ public class World
         this.playerPosition = new Vector3f(0.0f, 0.0f, 0.0f);
         this.lastPlayerChunkCoord = getChunkCoordinatesForBlock(playerPosition);
 
-        // Initialize new queues
         this.chunksToUnloadQueue = new ConcurrentLinkedQueue<>();
         this.chunksToGenerateQueue = new ConcurrentLinkedQueue<>();
         this.chunksToUploadQueue = new ConcurrentLinkedQueue<>();
         this.chunksToForceUpdateQueue = new ConcurrentLinkedQueue<>();
 
-        // Initialize thread pool for chunk generation
-        // Use a number of threads equal to available CPU cores minus one for the main thread, minimum 1.
         int numThreads = Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
         chunkGenerationThreadPool = Executors.newFixedThreadPool(numThreads);
         Debug.logInfo("Initialized chunk generation thread pool with " + numThreads + " threads.");
@@ -84,87 +89,80 @@ public class World
     // ------ Lifecycle Methods ---------//
     // -----------------------------------//
 
-    /**
-     * Initializes the world by loading the initial set of chunks around the player.
-     */
     public void init()
     {
-        // Enqueue initial chunks for generation
         enqueueInitialChunks();
     }
 
     private void enqueueInitialChunks()
     {
-        int renderDistance = Game.renderDistance;
+        int renderDistance = Game.renderDistance; // This is XZ render distance
         ChunkCoord playerChunkCoords = getChunkCoordinatesForBlock(playerPosition);
-        int fixedChunkY = 0; // Assuming all chunks are at y=0
 
-        // Use a temporary list to store desired chunks, then sort them by distance
         List<ChunkCoord> potentialChunksToGenerate = new ArrayList<>();
 
         for (int x = -renderDistance; x <= renderDistance; x++)
         {
             for (int z = -renderDistance; z <= renderDistance; z++)
             {
-                ChunkCoord targetChunkCoord = new ChunkCoord(playerChunkCoords.x + x, fixedChunkY, playerChunkCoords.z + z);
-                // Load/Generate chunk only if it's not already loaded and not already in a queue
-                if (!loadedChunks.containsKey(targetChunkCoord) && !chunksToGenerateQueue.contains(targetChunkCoord) && !chunksToUploadQueue.stream().anyMatch(res -> res.coord.equals(targetChunkCoord)) &&
-                        !chunksToForceUpdateQueue.contains(targetChunkCoord))
+                // Loop through all relevant Y-levels for terrain
+                for (int y = WORLD_MIN_CHUNK_Y; y <= WORLD_MAX_CHUNK_Y; y++) // <<< MODIFIED HERE
                 {
-                    potentialChunksToGenerate.add(targetChunkCoord);
+                    ChunkCoord targetChunkCoord = new ChunkCoord(playerChunkCoords.x + x, y, // Use the iterated Y-chunk coordinate
+                            playerChunkCoords.z + z);
+
+                    // Load/Generate chunk only if it's not already loaded and not already in a queue
+                    if (!loadedChunks.containsKey(targetChunkCoord) && !chunksToGenerateQueue.contains(targetChunkCoord) && !chunksToUploadQueue.stream().anyMatch(res -> res.coord.equals(targetChunkCoord)) && !chunksToForceUpdateQueue.contains(targetChunkCoord))
+                    {
+                        potentialChunksToGenerate.add(targetChunkCoord);
+                    }
                 }
             }
         }
 
         // Sort chunks by distance from the player chunk (Manhattan distance for simplicity)
-        // You could use Euclidean distance if preferred, but Manhattan is faster for grid systems.
-        potentialChunksToGenerate.sort(Comparator.comparingInt(coord ->
-                Math.abs(coord.x - playerChunkCoords.x) + Math.abs(coord.z - playerChunkCoords.z)));
+        // We still prioritize XZ distance for visible chunks, but also include Y distance.
+        potentialChunksToGenerate.sort(Comparator.comparingInt(coord -> Math.abs(coord.x - playerChunkCoords.x) + Math.abs(coord.z - playerChunkCoords.z) + Math.abs(coord.y - playerChunkCoords.y) // Include Y distance for sorting
+        ));
 
-        // Add sorted chunks to the generation queue
-        for (ChunkCoord coord : potentialChunksToGenerate) {
+        for (ChunkCoord coord : potentialChunksToGenerate)
+        {
             chunksToGenerateQueue.add(coord);
         }
     }
 
-    /**
-     * Updates the world state, primarily managing chunk loading/unloading based on player movement. Processes a limited number of items from the chunk queues each frame.
-     *
-     * @param deltaTime The time elapsed since the last frame (not directly used here, but common for update methods).
-     */
     public void update()
     {
-        // Convert player's float position to integer chunk coordinates
-        ChunkCoord currentPlayerChunk = getChunkCoordinatesForBlock(playerPosition);
-
-        // Check if the player has moved to a new chunk
-        if (!currentPlayerChunk.equals(lastPlayerChunkCoord))
-        {
-            // // // Debug.logInfo("Player moved to new chunk: " + currentPlayerChunk.toString());
-            updateChunkQueues(); // Re-evaluate and update queues
-            lastPlayerChunkCoord = currentPlayerChunk; // Update last known chunk
+        Camera activeCamera = Game.getActiveCamera(); // You need to implement this method in your Game class
+        if (activeCamera == null) {
+            Debug.logWarning("No main camera found for frustum culling. Skipping culling for this frame.");
+            // Potentially return early or handle gracefully if no camera is active
+            return;
         }
 
-        // --- NEW: Process chunks from queues within a budget ---
-        processChunkQueuesAsync();
+        ChunkCoord currentPlayerChunk = getChunkCoordinatesForBlock(playerPosition);
 
-        // You might add other world update logic here later (e.g., ticking blocks, physics)
+        // Only update chunk queues if player has moved to a new XZ chunk (or Y chunk, if relevant)
+        // This 'fixedChunkY=0' in your original ChunkCoord check means it only triggers on XZ moves.
+        // If you want it to trigger on Y-chunk changes too, you'll need ChunkCoord to check Y in equals().
+        if (!currentPlayerChunk.equals(lastPlayerChunkCoord))
+        {
+            updateChunkQueues();
+            lastPlayerChunkCoord = currentPlayerChunk;
+        }
+
+        processChunkQueuesAsync();
     }
 
-    /**
-     * Disposes of all resources held by the world, specifically unloading all loaded chunks and freeing their GPU-side mesh data, and shutting down the thread pool.
-     */
     public void dispose()
     {
-        // Debug.logInfo("Disposing world: unloading all chunks and shutting down thread pool.");
+        Debug.logInfo("Disposing world: unloading all chunks and shutting down thread pool.");
 
-        // Clear any pending chunks in queues
         chunksToUnloadQueue.clear();
         chunksToGenerateQueue.clear();
         chunksToUploadQueue.clear();
         chunksToForceUpdateQueue.clear();
 
-        // Shut down the thread pool (wait for current tasks to finish or interrupt them)
         chunkGenerationThreadPool.shutdown();
         try
         {
@@ -179,17 +177,15 @@ public class World
             chunkGenerationThreadPool.shutdownNow();
         }
 
-        // Dispose all currently loaded chunks immediately upon shutdown
         Set<ChunkCoord> coordsToDispose = new HashSet<>(loadedChunks.keySet());
 
         for (ChunkCoord coord : coordsToDispose)
         {
-            Chunk chunk = loadedChunks.remove(coord); // Remove from map
+            Chunk chunk = loadedChunks.remove(coord);
             if (chunk != null)
             {
-                this.renderer.disposeChunkMesh(coord); // Notify renderer to remove GPU mesh
-                chunk.dispose(); // Call the chunk's dispose method
-                //Debug.log("Disposing chunk: " + coord);
+                this.renderer.disposeChunkMesh(coord);
+                chunk.dispose();
             }
         }
         loadedChunks.clear();
@@ -199,40 +195,39 @@ public class World
     // ---- Chunk Management Methods ----//
     // -----------------------------------//
 
-    /**
-     * Updates the loading and unloading queues based on the current player position and render distance. This method is called when the player changes chunks. It identifies which chunks *should* be loaded and which *should* be unloaded.
-     */
     private void updateChunkQueues()
     {
-        int renderDistance = Game.renderDistance;
+        int renderDistance = Game.renderDistance; // XZ render distance
         ChunkCoord playerChunkCoords = getChunkCoordinatesForBlock(playerPosition);
-        int fixedChunkY = 0;
 
         Set<ChunkCoord> desiredChunkCoords = new HashSet<>();
-        List<ChunkCoord> newChunksToGenerate = new ArrayList<>(); // Use a temporary list
+        List<ChunkCoord> newChunksToGenerate = new ArrayList<>();
 
         for (int x = -renderDistance; x <= renderDistance; x++)
         {
             for (int z = -renderDistance; z <= renderDistance; z++)
             {
-                ChunkCoord targetChunkCoord = new ChunkCoord(playerChunkCoords.x + x, fixedChunkY, playerChunkCoords.z + z);
-                desiredChunkCoords.add(targetChunkCoord);
-
-                // If a desired chunk is NOT already loaded and NOT already in any processing queue, add it to our temporary list.
-                if (!loadedChunks.containsKey(targetChunkCoord) && !chunksToGenerateQueue.contains(targetChunkCoord) && !chunksToUploadQueue.stream().anyMatch(res -> res.coord.equals(targetChunkCoord)) &&
-                        !chunksToForceUpdateQueue.contains(targetChunkCoord))
+                // Loop through all relevant Y-levels for terrain
+                for (int y = WORLD_MIN_CHUNK_Y; y <= WORLD_MAX_CHUNK_Y; y++) // <<< MODIFIED HERE
                 {
-                    newChunksToGenerate.add(targetChunkCoord);
+                    ChunkCoord targetChunkCoord = new ChunkCoord(playerChunkCoords.x + x, y, // Use the iterated Y-chunk coordinate
+                            playerChunkCoords.z + z);
+                    desiredChunkCoords.add(targetChunkCoord);
+
+                    if (!loadedChunks.containsKey(targetChunkCoord) && !chunksToGenerateQueue.contains(targetChunkCoord) && !chunksToUploadQueue.stream().anyMatch(res -> res.coord.equals(targetChunkCoord)) && !chunksToForceUpdateQueue.contains(targetChunkCoord))
+                    {
+                        newChunksToGenerate.add(targetChunkCoord);
+                    }
                 }
             }
         }
 
         // Sort new chunks to generate by distance from the player
-        newChunksToGenerate.sort(Comparator.comparingInt(coord ->
-                Math.abs(coord.x - playerChunkCoords.x) + Math.abs(coord.z - playerChunkCoords.z)));
+        newChunksToGenerate.sort(Comparator.comparingInt(coord -> Math.abs(coord.x - playerChunkCoords.x) + Math.abs(coord.z - playerChunkCoords.z) + Math.abs(coord.y - playerChunkCoords.y) // Include Y distance for sorting
+        ));
 
-        // Add sorted new chunks to the generation queue
-        for (ChunkCoord coord : newChunksToGenerate) {
+        for (ChunkCoord coord : newChunksToGenerate)
+        {
             chunksToGenerateQueue.add(coord);
         }
 
@@ -243,6 +238,10 @@ public class World
             Map.Entry<ChunkCoord, Chunk> entry = iterator.next();
             ChunkCoord currentLoadedCoord = entry.getKey();
 
+            // If a chunk is loaded but outside the current desired XZ *or* the fixed Y range, unload it.
+            // This ensures chunks beyond your WORLD_MAX_BLOCK_Y or below WORLD_MIN_BLOCK_Y are unloaded.
+            // You might want to adjust the unload distance based on your render distance.
+            // For now, we'll keep the existing logic and let the desiredChunkCoords handle it.
             if (!desiredChunkCoords.contains(currentLoadedCoord))
             {
                 if (!chunksToUnloadQueue.contains(currentLoadedCoord))
@@ -253,11 +252,9 @@ public class World
         }
     }
 
-    /**
-     * Orchestrates the asynchronous chunk generation and synchronous GPU upload. This method runs on the main thread.
-     */
     private void processChunkQueuesAsync()
     {
+        // ... (No changes needed in this method, it correctly processes the queues) ...
         int processedCount = 0;
 
         // 1. Process forced updates (e.g., from player interaction) first
@@ -269,8 +266,7 @@ public class World
                 Chunk chunk = loadedChunks.get(coordToUpdate);
                 if (chunk != null)
                 {
-                    // Debug.logInfo("Force updating chunk mesh: " + coordToUpdate);
-                    submitChunkGenerationTask(chunk); // Submit to worker thread for regeneration
+                    submitChunkGenerationTask(chunk);
                     processedCount++;
                 }
             }
@@ -282,12 +278,11 @@ public class World
             ChunkCoord coordToUnload = chunksToUnloadQueue.poll();
             if (coordToUnload != null)
             {
-                Chunk chunk = loadedChunks.remove(coordToUnload); // Remove from map
+                Chunk chunk = loadedChunks.remove(coordToUnload);
                 if (chunk != null)
                 {
-                    // Debug.logInfo("Unloading chunk: " + coordToUnload.toString());
-                    this.renderer.disposeChunkMesh(coordToUnload); // Notify renderer to free GPU mesh data
-                    chunk.dispose(); // Call the Chunk object's dispose method
+                    this.renderer.disposeChunkMesh(coordToUnload);
+                    chunk.dispose();
                     processedCount++;
                 }
             }
@@ -300,15 +295,12 @@ public class World
             ChunkCoord coord = chunksToGenerateQueue.poll();
             if (coord != null)
             {
-                // Check if this chunk was already loaded by a direct setBlock call
                 if (loadedChunks.containsKey(coord))
                 {
-                    // Skip if already loaded, it means it was force-loaded
-                    // Debug.logInfo("Skipping generation of already loaded chunk: " + coord);
                     continue;
                 }
-                Chunk newChunk = new Chunk(coord); // Create the Chunk object (generates block data)
-                loadedChunks.put(coord, newChunk); // Add to map immediately
+                Chunk newChunk = new Chunk(coord);
+                loadedChunks.put(coord, newChunk);
                 submitChunkGenerationTask(newChunk);
                 submittedCount++;
             }
@@ -324,28 +316,19 @@ public class World
                 Chunk chunk = loadedChunks.get(result.coord);
                 if (chunk != null)
                 {
-                    // Debug.logInfo("Uploading chunk mesh to GPU for: " + result.coord);
-                    // Use the pre-allocated ChunkMesh from the Chunk object
                     chunk.getMesh().uploadToGPU(result.vertices, result.normals);
-                    this.renderer.registerChunkMesh(chunk.getCoord(), chunk.getMesh()); // <--- CALL IT HERE!
+                    this.renderer.registerChunkMesh(chunk.getCoord(), chunk.getMesh());
 
-                    chunk.setIsDirty(false); // Mark as not dirty after successful upload
+                    chunk.setIsDirty(false);
                     uploadedCount++;
                 } else
                 {
-                    // This can happen if the chunk was unloaded while its mesh was being generated
-                    Debug.logWarning("Skipping GPU upload for unloaded chunk: " + result.coord);
-                    // No need to free buffers here, they are freed in uploadToGPU's finally block
+                    //Debug.logWarning("Skipping GPU upload for unloaded chunk: " + result.coord);
                 }
             }
         }
     }
 
-    /**
-     * Submits a chunk's mesh generation task to the background thread pool. This method runs on the main thread.
-     *
-     * @param chunk The chunk for which to generate mesh data.
-     */
     private void submitChunkGenerationTask(Chunk chunk)
     {
         if (chunk == null)
@@ -355,15 +338,11 @@ public class World
         chunkGenerationThreadPool.submit(() -> {
             try
             {
-                // These lists are thread-local and temporary for this job
                 List<Float> positions = new ArrayList<>();
                 List<Float> normals = new ArrayList<>();
 
-                // Create a temporary ChunkMesh instance to call generateMeshData on.
-                // It doesn't need to be the actual ChunkMesh object associated with the Chunk,
-                // as we're just generating data here.
-                // A static utility method could also work to avoid creating objects.
-                chunk.getMesh().generateMeshData(chunk, positions, normals); // Pass the chunk itself for block data access
+                // Pass the chunk itself for block data access
+                chunk.getMesh().generateMeshData(chunk, positions, normals);
 
                 float[] vertices = new float[positions.size()];
                 for (int i = 0; i < positions.size(); i++)
@@ -379,7 +358,6 @@ public class World
 
                 int vertexCount = vertices.length / 3;
 
-                // Add the result to the upload queue for the main thread
                 chunksToUploadQueue.add(new ChunkMeshJobResult(coord, vertices, normalData, vertexCount));
             } catch (Exception e)
             {
@@ -389,12 +367,6 @@ public class World
         });
     }
 
-    /**
-     * Gets a chunk by its ChunkCoord.
-     *
-     * @param coord The coordinates of the chunk.
-     * @return The Chunk object if loaded, null otherwise.
-     */
     public Chunk getChunk(ChunkCoord coord)
     {
         return loadedChunks.get(coord);
@@ -404,12 +376,6 @@ public class World
     // ------ Block Management ---------//
     // -----------------------------------//
 
-    /**
-     * Sets a block at the given world coordinates. If the chunk containing the block is not loaded, it will be loaded. The chunk's mesh will be regenerated and re-uploaded to the renderer.
-     *
-     * @param blockCoords The block's world coordinates (e.g., from player interaction).
-     * @param blockId The ID of the block to set (e.g., BLOCK_TYPE_AIR_ID, BLOCK_TYPE_SOLID_ID).
-     */
     public void setBlock(Vector3i blockCoords, short blockId)
     {
         ChunkCoord chunkCoords = getChunkCoordinatesForBlock(blockCoords);
@@ -417,35 +383,24 @@ public class World
 
         if (chunkToModify == null)
         {
-            Debug.logWarning("Attempted to set block in unloaded chunk at: " + chunkCoords.toString() + ". Force loading it now.");
             // If the chunk is not loaded, create it and add to loadedChunks
+            Debug.logWarning("Attempted to set block in unloaded chunk at: " + chunkCoords.toString() + ". Force loading it now.");
             chunkToModify = new Chunk(chunkCoords);
             loadedChunks.put(chunkCoords, chunkToModify);
-            // It will be added to the force update queue below
         }
 
         Vector3i blockLocalCoords = getLocalBlockCoordinatesInChunk(blockCoords);
 
-        // Only update if the block ID actually changes
         if (chunkToModify.getBlock(blockLocalCoords) != blockId)
         {
-            chunkToModify.setBlock(blockLocalCoords, blockId); // This marks the chunk as dirty
-            // Add to force update queue for immediate (next frame) regeneration
-            // Ensure it's not already in a generation queue to avoid duplicate work.
+            chunkToModify.setBlock(blockLocalCoords, blockId);
             if (!chunksToForceUpdateQueue.contains(chunkCoords) && !chunksToGenerateQueue.contains(chunkCoords) && !chunksToUploadQueue.stream().anyMatch(res -> res.coord.equals(chunkCoords)))
             {
                 chunksToForceUpdateQueue.add(chunkCoords);
-                // Debug.logInfo("Chunk " + chunkCoords + " added to force update queue.");
             }
         }
     }
 
-    /**
-     * Gets the block ID at the given world coordinates.
-     *
-     * @param blockCoords The block's world coordinates.
-     * @return The block ID, or BLOCK_TYPE_AIR_ID if the chunk is not loaded (or an error occurs).
-     */
     public short getBlock(Vector3i blockCoords)
     {
         ChunkCoord chunkCoords = getChunkCoordinatesForBlock(blockCoords);
@@ -464,12 +419,6 @@ public class World
     // ---- Helper/Utility Methods -----//
     // -----------------------------------//
 
-    /**
-     * Calculates the ChunkCoord for a given world block position. Note: This handles negative coordinates correctly.
-     *
-     * @param worldBlockPos The world coordinates of a block.
-     * @return The ChunkCoord containing that block.
-     */
     public ChunkCoord getChunkCoordinatesForBlock(Vector3i worldBlockPos)
     {
         int chunkX = (int) Math.floor((float) worldBlockPos.x / Chunk.CHUNK_SIZE);
@@ -478,12 +427,6 @@ public class World
         return new ChunkCoord(chunkX, chunkY, chunkZ);
     }
 
-    /**
-     * Calculates the ChunkCoord for a given floating-point world position (e.g., player position).
-     *
-     * @param worldPos The floating-point world position.
-     * @return The ChunkCoord containing that position.
-     */
     public ChunkCoord getChunkCoordinatesForBlock(Vector3f worldPos)
     {
         int chunkX = (int) Math.floor(worldPos.x / Chunk.CHUNK_SIZE);
@@ -492,12 +435,6 @@ public class World
         return new ChunkCoord(chunkX, chunkY, chunkZ);
     }
 
-    /**
-     * Calculates the local coordinates of a block within its chunk (0-15).
-     *
-     * @param worldBlockPos The world coordinates of the block.
-     * @return A Vector3i representing the block's local position (0 to CHUNK_SIZE-1).
-     */
     public Vector3i getLocalBlockCoordinatesInChunk(Vector3i worldBlockPos)
     {
         int localX = Math.floorMod(worldBlockPos.x, Chunk.CHUNK_SIZE);
@@ -510,11 +447,6 @@ public class World
     // --- Player Position Accessor ----//
     // -----------------------------------//
 
-    /**
-     * Sets the player's current world position.
-     *
-     * @param playerPosition The new floating-point world position of the player.
-     */
     public void setPlayerPosition(Vector3f playerPosition)
     {
         this.playerPosition.set(playerPosition);

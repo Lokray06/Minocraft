@@ -3,7 +3,6 @@ package com.juanpa.engine.renderer;
 import com.juanpa.engine.Debug;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
-import org.lwjgl.opengl.GL11; // Required for GL11.glGetError()
 import org.lwjgl.opengl.GL20;
 import org.lwjgl.system.MemoryStack;
 

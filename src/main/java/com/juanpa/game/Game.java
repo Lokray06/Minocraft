@@ -22,7 +22,7 @@ public class Game
 	private World world;
 
 	private List<GameObject> gameObjects; // NEW: List of top-level GameObjects
-	private Camera activeCamera; // NEW: Reference to the current active camera component
+	private static Camera activeCamera; // NEW: Reference to the current active camera component
 
 	GameObject player;
 
@@ -39,7 +39,7 @@ public class Game
 
 		// --- Create Player GameObject ---
 		player = new GameObject("Player"); // Create a new GameObject
-		player.getTransform().position.set(8, 10, 40); // Set initial position on its Transform
+		player.getTransform().position.set(8, 130, 40); // Set initial position on its Transform
 		player.addComponent(new PlayerController()); // Add the PlayerController component
 		Camera playerCamera = new Camera();
 		player.addComponent(playerCamera); // Add the Camera component
@@ -99,6 +99,7 @@ public class Game
 		{
 			world.setPlayerPosition(playerTransform.position);
 		}
+
 		world.update(); // Update world logic (e.g., chunk visibility)
 	}
 
@@ -116,5 +117,10 @@ public class Game
 	public World getWorld()
 	{
 		return world;
+	}
+
+	public static Camera getActiveCamera()
+	{
+		return activeCamera;
 	}
 }
