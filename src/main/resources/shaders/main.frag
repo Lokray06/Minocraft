@@ -54,5 +54,5 @@ void main()
     // FragColor = vec4(baseColor, 1.0);
 
     // For debugging normals:
-    // FragColor = vec4(normal * 0.5 + 0.5, 1.0);
+    //FragColor = vec4(normal * 0.5 + 0.5, 1.0);
 }

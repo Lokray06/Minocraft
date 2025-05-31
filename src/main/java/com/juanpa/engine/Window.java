@@ -106,17 +106,12 @@ public class Window
 	{
 		glfwSwapBuffers(windowHandle);
 
-		// --- FPS Counter Logic ---
-		frames++;
-		double currentTime = glfwGetTime();
-		if(currentTime - lastFPSTime >= 1.0)
-		{ // If at least one second has passed
-			int fps = frames;
+		long currentTime = System.currentTimeMillis();
+		if (currentTime - lastFPSTime > 1000) { // Update every second
+			int fps = (int) (1.0f / Time.deltaTime);
 			glfwSetWindowTitle(windowHandle, currentTitle + " | FPS: " + fps);
-			frames = 0;
 			lastFPSTime = currentTime;
 		}
-		// --------------------------
 	}
 
 	/**

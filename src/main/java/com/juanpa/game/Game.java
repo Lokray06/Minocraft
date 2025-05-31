@@ -16,6 +16,8 @@ import org.lwjgl.glfw.GLFW;
 import java.util.ArrayList;
 import java.util.List;
 
+import static com.juanpa.engine.world.chunk.Chunk.CHUNK_SIZE;
+
 public class Game
 {
 	private Engine engine;
@@ -26,11 +28,14 @@ public class Game
 
 	GameObject player;
 
-	public static byte renderDistance = 32;
+
+	public static int RENDER_DISTANCE_METERS = 500;
+	public static byte renderDistance = (byte) Math.ceil(RENDER_DISTANCE_METERS / CHUNK_SIZE);
 	public static long seed = 12345L;
 
 	public Game(int width, int height, String name)
 	{
+		Debug.logInfo("Render distance: " + RENDER_DISTANCE_METERS + " meters. CHUNK_SIZE: " + CHUNK_SIZE + " blocks. Render distance in chunks: " + renderDistance);
 		engine = new Engine(width, height, name, (byte) 4, false);
 		engine.init(this); // Initializes Input.java via Window
 

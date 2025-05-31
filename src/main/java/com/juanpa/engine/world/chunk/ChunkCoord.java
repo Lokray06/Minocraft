@@ -35,4 +35,18 @@ public class ChunkCoord
 	{
 		return "ChunkCoord{" + x +  ", " + y + ", " + z + '}';
 	}
+
+	/**
+	 * Calculates the squared Euclidean distance between this ChunkCoord and another ChunkCoord.
+	 * This avoids sqrt for faster comparisons.
+	 *
+	 * @param other The other ChunkCoord.
+	 * @return The squared distance.
+	 */
+	public double distanceSq(ChunkCoord other) {
+		long dx = (long) this.x - other.x;
+		long dy = (long) this.y - other.y;
+		long dz = (long) this.z - other.z;
+		return (double) (dx * dx + dy * dy + dz * dz);
+	}
 }

@@ -6,8 +6,9 @@ import com.juanpa.engine.components.Camera;
 import com.juanpa.engine.renderer.Renderer;
 import com.juanpa.engine.world.chunk.Chunk;
 import com.juanpa.engine.world.chunk.ChunkCoord;
-import com.juanpa.engine.world.chunk.ChunkMeshJobResult;
-import com.juanpa.game.Game;
+import com.juanpa.engine.world.chunk.ChunkMesh; // Needed for QuadInstanceData
+import com.juanpa.engine.world.chunk.InstancedChunkMeshJobResult;
+import com.juanpa.game.Game; // Import Game to access renderDistanceChunks
 import org.joml.Vector3f;
 import org.joml.Vector3i;
 
@@ -36,7 +37,7 @@ public class World
 	private static final int WORLD_MIN_BLOCK_Y = 0;
 	// Calculate based on Chunk.java's generation parameters:
 	// BASE_SEA_LEVEL (60) + HEIGHT_SCALE (80) = 140
-	private static final int WORLD_MAX_BLOCK_Y = 60 + 80; // Should be 140
+	private static final int WORLD_MAX_BLOCK_Y = 16 * 8; // Should be 140
 
 	// Then, the chunk bounds will be:
 	private static final int WORLD_MIN_CHUNK_Y = WORLD_MIN_BLOCK_Y / Chunk.CHUNK_SIZE; // 0
@@ -49,16 +50,16 @@ public class World
 	private Renderer renderer;
 
 	private Vector3f playerPosition;
-	private ChunkCoord lastPlayerChunkCoord;
+	private ChunkCoord lastPlayerChunkCoord; // This will now typically only store XZ, or just be updated to reflect current player's XZ chunk
 
 	private Queue<ChunkCoord> chunksToUnloadQueue;
-	private Queue<NewChunkMeshJobResult> chunksToUploadQueue;
+	private Queue<InstancedChunkMeshJobResult> chunksToUploadQueue;
 	private Queue<ChunkCoord> chunksToForceUpdateQueue;
 	private Queue<ChunkCoord> chunksToGenerateQueue; // Moved here for logical grouping
 
 	private ExecutorService chunkGenerationThreadPool;
-	private static final int CHUNKS_PER_FRAME_PROCESS_LIMIT = 24;
-	private static final int CHUNKS_PER_FRAME_GENERATE_LIMIT = 24;
+	private static final int CHUNKS_PER_FRAME_PROCESS_LIMIT = 2;
+	private static final int CHUNKS_PER_FRAME_GENERATE_LIMIT = 2;
 
 	// ----------------------//
 	// ---- Constructor ----//
@@ -70,7 +71,10 @@ public class World
 		this.loadedChunks = new HashMap<>();
 
 		this.playerPosition = new Vector3f(0.0f, 0.0f, 0.0f);
+		// For lastPlayerChunkCoord, only consider XZ for movement updates, but store the full Y
+		// so that it reflects the actual chunk the player is in.
 		this.lastPlayerChunkCoord = getChunkCoordinatesForBlock(playerPosition);
+
 
 		this.chunksToUnloadQueue = new ConcurrentLinkedQueue<>();
 		this.chunksToGenerateQueue = new ConcurrentLinkedQueue<>();
@@ -96,23 +100,44 @@ public class World
 
 	private void enqueueInitialChunks()
 	{
-		int renderDistance = Game.renderDistance; // This is XZ render distance
+		// Use Game.renderDistanceChunks which is calculated based on radial distance
+		int renderDistance = Game.renderDistance;
 		ChunkCoord playerChunkCoords = getChunkCoordinatesForBlock(playerPosition);
 
 		List<ChunkCoord> potentialChunksToGenerate = new ArrayList<>();
 
-		for(int x = -renderDistance; x <= renderDistance; x++)
+		// Iterate over a slightly larger square bounding box to find all chunks within radial distance
+		// Adding 2 to renderDistance to ensure we cover all corners when CHUNK_SIZE is large
+		// This range is for X and Z
+		for(int x = -renderDistance - 2; x <= renderDistance + 2; x++)
 		{
-			for(int z = -renderDistance; z <= renderDistance; z++)
+			for(int z = -renderDistance - 2; z <= renderDistance + 2; z++)
 			{
-				// Loop through all relevant Y-levels for terrain
-				for(int y = WORLD_MIN_CHUNK_Y; y <= WORLD_MAX_CHUNK_Y; y++) // <<< MODIFIED HERE
+				// Calculate the 2D (XZ) squared distance from the player's XZ chunk
+				double dx = (double) x;
+				double dz = (double) z;
+				double distSqXZ = dx * dx + dz * dz;
+
+				// Square of the render distance to avoid sqrt calculation, which is faster
+				if(distSqXZ > (renderDistance * renderDistance))
 				{
-					ChunkCoord targetChunkCoord = new ChunkCoord(playerChunkCoords.x + x, y, // Use the iterated Y-chunk coordinate
+					continue; // Skip if outside radial XZ distance
+				}
+				// -----------------------------------------
+
+				// Loop through all relevant Y-levels for terrain
+				// Y-level is independent of the XZ radial check
+				for(int y = WORLD_MIN_CHUNK_Y; y <= WORLD_MAX_CHUNK_Y; y++)
+				{
+					ChunkCoord targetChunkCoord = new ChunkCoord(playerChunkCoords.x + x, y,
 							playerChunkCoords.z + z);
 
+
 					// Load/Generate chunk only if it's not already loaded and not already in a queue
-					if(!loadedChunks.containsKey(targetChunkCoord) && !chunksToGenerateQueue.contains(targetChunkCoord) && !chunksToUploadQueue.stream().anyMatch(res -> res.coord.equals(targetChunkCoord)) && !chunksToForceUpdateQueue.contains(targetChunkCoord))
+					if(!loadedChunks.containsKey(targetChunkCoord) &&
+							!chunksToGenerateQueue.contains(targetChunkCoord) &&
+							!chunksToUploadQueue.stream().anyMatch(res -> res.coord.equals(targetChunkCoord)) &&
+							!chunksToForceUpdateQueue.contains(targetChunkCoord))
 					{
 						potentialChunksToGenerate.add(targetChunkCoord);
 					}
@@ -120,36 +145,41 @@ public class World
 			}
 		}
 
-		// Sort chunks by distance from the player chunk (Manhattan distance for simplicity)
-		// We still prioritize XZ distance for visible chunks, but also include Y distance.
-		potentialChunksToGenerate.sort(Comparator.comparingInt(coord -> Math.abs(coord.x - playerChunkCoords.x) + Math.abs(coord.z - playerChunkCoords.z) + Math.abs(coord.y - playerChunkCoords.y) // Include Y distance for sorting
-		));
+		// Sort chunks by XZ distance from the player chunk (Euclidean distance for better radial prioritization)
+		// The Y-coordinate in the sort comparator for distanceSqXZ will be ignored implicitly
+		// because distanceSqXZ only calculates based on x and z.
+		potentialChunksToGenerate.sort(Comparator.comparingDouble(coord -> {
+			long dx = (long) coord.x - playerChunkCoords.x;
+			long dz = (long) coord.z - playerChunkCoords.z;
+			return (double) (dx * dx + dz * dz);
+		}));
 
 		for(ChunkCoord coord : potentialChunksToGenerate)
 		{
 			chunksToGenerateQueue.add(coord);
 		}
+		Debug.logInfo("Enqueued " + potentialChunksToGenerate.size() + " initial chunks for radial XZ generation.");
 	}
 
 	public void update()
 	{
-		Camera activeCamera = Game.getActiveCamera(); // You need to implement this method in your Game class
+		Camera activeCamera = Game.getActiveCamera();
 		if(activeCamera == null)
 		{
 			Debug.logWarning("No main camera found for frustum culling. Skipping culling for this frame.");
-			// Potentially return early or handle gracefully if no camera is active
 			return;
 		}
 
 		ChunkCoord currentPlayerChunk = getChunkCoordinatesForBlock(playerPosition);
 
-		// Only update chunk queues if player has moved to a new XZ chunk (or Y chunk, if relevant)
-		// This 'fixedChunkY=0' in your original ChunkCoord check means it only triggers on XZ moves.
-		// If you want it to trigger on Y-chunk changes too, you'll need ChunkCoord to check Y in equals().
-		if(!currentPlayerChunk.equals(lastPlayerChunkCoord))
+		// Only update chunk queues if player has moved to a new XZ chunk
+		// We create a temporary ChunkCoord for comparison that ignores Y,
+		// or you can simply compare playerChunkCoords.x and playerChunkCoords.z
+		// with lastPlayerChunkCoord.x and lastPlayerChunkCoord.z
+		if(currentPlayerChunk.x != lastPlayerChunkCoord.x || currentPlayerChunk.z != lastPlayerChunkCoord.z)
 		{
 			updateChunkQueues();
-			lastPlayerChunkCoord = currentPlayerChunk;
+			lastPlayerChunkCoord = currentPlayerChunk; // Update lastPlayerChunkCoord with the new XZ
 		}
 
 		processChunkQueuesAsync();
@@ -199,34 +229,49 @@ public class World
 
 	private void updateChunkQueues()
 	{
-		int renderDistance = Game.renderDistance; // XZ render distance
-		ChunkCoord playerChunkCoords = getChunkCoordinatesForBlock(playerPosition);
+		int renderDistance = Game.renderDistance;
+		ChunkCoord playerChunkCoords = getChunkCoordinatesForBlock(playerPosition); // Current player's chunk (includes Y)
 
 		Set<ChunkCoord> desiredChunkCoords = new HashSet<>();
 		List<ChunkCoord> newChunksToGenerate = new ArrayList<>();
 
-		for(int x = -renderDistance; x <= renderDistance; x++)
+		// Iterate over a slightly larger square bounding box for checking
+		for(int x = -renderDistance - 2; x <= renderDistance + 2; x++)
 		{
-			for(int z = -renderDistance; z <= renderDistance; z++)
+			for(int z = -renderDistance - 2; z <= renderDistance + 2; z++)
 			{
-				// Loop through all relevant Y-levels for terrain
-				for(int y = WORLD_MIN_CHUNK_Y; y <= WORLD_MAX_CHUNK_Y; y++) // <<< MODIFIED HERE
-				{
-					ChunkCoord targetChunkCoord = new ChunkCoord(playerChunkCoords.x + x, y, // Use the iterated Y-chunk coordinate
-							playerChunkCoords.z + z);
-					desiredChunkCoords.add(targetChunkCoord);
+				// Calculate the 2D (XZ) squared distance from the player's XZ chunk
+				double dx = (double) x;
+				double dz = (double) z;
+				double distSqXZ = dx * dx + dz * dz;
 
-					if(!loadedChunks.containsKey(targetChunkCoord) && !chunksToGenerateQueue.contains(targetChunkCoord) && !chunksToUploadQueue.stream().anyMatch(res -> res.coord.equals(targetChunkCoord)) && !chunksToForceUpdateQueue.contains(targetChunkCoord))
+				if(distSqXZ <= (renderDistance * renderDistance))
+				{ // Include if within XZ radial distance
+					// Loop through all relevant Y-levels for terrain
+					for(int y = WORLD_MIN_CHUNK_Y; y <= WORLD_MAX_CHUNK_Y; y++)
 					{
-						newChunksToGenerate.add(targetChunkCoord);
+						ChunkCoord targetChunkCoord = new ChunkCoord(playerChunkCoords.x + x, y,
+								playerChunkCoords.z + z);
+						desiredChunkCoords.add(targetChunkCoord);
+
+						if(!loadedChunks.containsKey(targetChunkCoord) &&
+								!chunksToGenerateQueue.contains(targetChunkCoord) &&
+								!chunksToUploadQueue.stream().anyMatch(res -> res.coord.equals(targetChunkCoord)) &&
+								!chunksToForceUpdateQueue.contains(targetChunkCoord))
+						{
+							newChunksToGenerate.add(targetChunkCoord);
+						}
 					}
 				}
 			}
 		}
 
-		// Sort new chunks to generate by distance from the player
-		newChunksToGenerate.sort(Comparator.comparingInt(coord -> Math.abs(coord.x - playerChunkCoords.x) + Math.abs(coord.z - playerChunkCoords.z) + Math.abs(coord.y - playerChunkCoords.y) // Include Y distance for sorting
-		));
+		// Sort new chunks to generate by XZ distance from the player
+		newChunksToGenerate.sort(Comparator.comparingDouble(coord -> {
+			long dx = (long) coord.x - playerChunkCoords.x;
+			long dz = (long) coord.z - playerChunkCoords.z;
+			return (double) (dx * dx + dz * dz);
+		}));
 
 		for(ChunkCoord coord : newChunksToGenerate)
 		{
@@ -240,10 +285,6 @@ public class World
 			Map.Entry<ChunkCoord, Chunk> entry = iterator.next();
 			ChunkCoord currentLoadedCoord = entry.getKey();
 
-			// If a chunk is loaded but outside the current desired XZ *or* the fixed Y range, unload it.
-			// This ensures chunks beyond your WORLD_MAX_BLOCK_Y or below WORLD_MIN_BLOCK_Y are unloaded.
-			// You might want to adjust the unload distance based on your render distance.
-			// For now, we'll keep the existing logic and let the desiredChunkCoords handle it.
 			if(!desiredChunkCoords.contains(currentLoadedCoord))
 			{
 				if(!chunksToUnloadQueue.contains(currentLoadedCoord))
@@ -311,14 +352,14 @@ public class World
 		int uploadedCount = 0;
 		while(!chunksToUploadQueue.isEmpty() && uploadedCount < CHUNKS_PER_FRAME_PROCESS_LIMIT)
 		{
-			NewChunkMeshJobResult result = chunksToUploadQueue.poll(); // Use new result type
+			InstancedChunkMeshJobResult result = chunksToUploadQueue.poll(); // Use new result type
 			if(result != null)
 			{
 				Chunk chunk = loadedChunks.get(result.coord);
 				if(chunk != null)
 				{
-					// Pass the prepared arrays directly
-					chunk.getMesh().uploadToGPU(result.vertices, result.normalIDs, result.blockTypes);
+					// Pass the prepared instance data directly
+					chunk.getMesh().uploadToGPU(result.instanceData); // New signature
 					this.renderer.registerChunkMesh(chunk.getCoord(), chunk.getMesh());
 					chunk.setIsDirty(false);
 					uploadedCount++;
@@ -337,29 +378,12 @@ public class World
 		{
 			try
 			{
-				List<Float> positionsList = new ArrayList<>();
-				List<Byte> normalIDsList = new ArrayList<>();
-				List<Byte> blockTypesList = new ArrayList<>();
-
 				// Use the new signature for generateMeshData
-				chunk.getMesh().generateMeshData(chunk, positionsList, normalIDsList, blockTypesList);
-
-				// Convert lists to arrays
-				float[] verticesArray = new float[positionsList.size()];
-				for(int i = 0; i < positionsList.size(); i++)
-					verticesArray[i] = positionsList.get(i);
-
-				byte[] normalIDsArray = new byte[normalIDsList.size()];
-				for(int i = 0; i < normalIDsList.size(); i++)
-					normalIDsArray[i] = normalIDsList.get(i);
-
-				byte[] blockTypesArray = new byte[blockTypesList.size()];
-				for(int i = 0; i < blockTypesList.size(); i++)
-					blockTypesArray[i] = blockTypesList.get(i);
+				List<ChunkMesh.QuadInstanceData> instanceDataList = new ArrayList<>();
+				chunk.getMesh().generateMeshData(chunk, instanceDataList); // New signature
 
 				// Add to upload queue using the new result type
-				chunksToUploadQueue.add(new NewChunkMeshJobResult(coord, verticesArray, normalIDsArray, blockTypesArray));
-
+				chunksToUploadQueue.add(new InstancedChunkMeshJobResult(coord, instanceDataList)); // Add new result type
 			}
 			catch(Exception e)
 			{

@@ -10,7 +10,7 @@ import org.joml.Vector3i;
 
 public class Chunk
 {
-	public static final byte CHUNK_SIZE = 16;
+	public static final byte CHUNK_SIZE = 64;
 	public static final int CHUNK_VOLUME = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
 
 	public short[][][] blocks = new short[CHUNK_SIZE][CHUNK_SIZE][CHUNK_SIZE]; // Make blocks public for ChunkMesh.generateMeshData

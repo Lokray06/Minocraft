@@ -1,57 +1,84 @@
 #version 460 core
 
-// Input vertex attributes from VBOs
-layout (location = 0) in vec3 a_position;    // Vertex position
-layout (location = 1) in uint a_normalID;    // Compressed normal ID (0-5)
-layout (location = 2) in uint a_blockTypeID; // Block Type ID
+// Base Quad Vertex Attribute (from shared VBO)
+layout (location = 0) in vec2 a_baseVertexPos; // 2D coords of the base 1x1 quad (0,0 to 1,1)
 
-// Uniforms - matrices for transforming geometry
-uniform mat4 modelMatrix;      // Transforms vertex from model space to world space
-uniform mat4 viewMatrix;       // Transforms vertex from world space to view space
-uniform mat4 projectionMatrix; // Transforms vertex from view space to clip space
+// Per-Instance Attributes (from instance VBO)
+layout (location = 1) in vec3 i_origin;        // Origin of the greedy quad in chunk space
+layout (location = 2) in vec2 i_dimensions;    // i_dimensions.x = dimensionH (height), i_dimensions.y = dimensionW (width)
+layout (location = 3) in float i_normalID_float;  // Normal ID for the quad (0-5)
+layout (location = 4) in float i_blockTypeID_float;// Block Type ID for the quad
 
-// Outputs to the fragment shader
-out vec3 v_worldPosition; // Vertex position in world space
-out vec3 v_normal;        // Reconstructed and transformed normal vector in world space
-flat out uint v_blockTypeID; // Block type ID (flat to prevent interpolation)
+// Uniforms
+uniform mat4 modelMatrix;      // Chunk's world transform
+uniform mat4 viewMatrix;
+uniform mat4 projectionMatrix;
 
-// Predefined normals corresponding to IDs (ensure this matches Java encoding)
-// ID 0: +Z (Front)
-// ID 1: -Z (Back)
-// ID 2: -X (Left)
-// ID 3: +X (Right)
-// ID 4: +Y (Top)
-// ID 5: -Y (Bottom)
+// Outputs to Fragment Shader
+out vec3 v_worldPosition;
+out vec3 v_normal;
+flat out uint v_blockTypeID;
+
+// Predefined normals (same as before)
 const vec3 normals[6] = vec3[](
-    vec3(0.0, 0.0, 1.0),  // ID 0: Front
-    vec3(0.0, 0.0, -1.0), // ID 1: Back
-    vec3(-1.0, 0.0, 0.0), // ID 2: Left
-    vec3(1.0, 0.0, 0.0),  // ID 3: Right
-    vec3(0.0, 1.0, 0.0),  // ID 4: Top
-    vec3(0.0, -1.0, 0.0)  // ID 5: Bottom
+    vec3(0.0, 0.0, 1.0),  // ID 0: Front (+Z)
+    vec3(0.0, 0.0, -1.0), // ID 1: Back (-Z)
+    vec3(-1.0, 0.0, 0.0), // ID 2: Left (-X)
+    vec3(1.0, 0.0, 0.0),  // ID 3: Right (+X)
+    vec3(0.0, 1.0, 0.0),  // ID 4: Top (+Y)
+    vec3(0.0, -1.0, 0.0)  // ID 5: Bottom (-Y)
 );
+
+// These define the world-space axes for U and V dimensions of the quad on each face type
+// U_direction corresponds to the greedy meshing 'u_axis' (used with i_dimensions.x / height)
+// V_direction corresponds to the greedy meshing 'v_axis' (used with i_dimensions.y / width)
+
+const vec3 face_U_direction[6] = vec3[]( // Direction for dimensionH (height, maps to a_baseVertexPos.y)
+    vec3(1.0, 0.0, 0.0), // Front (+Z): Height along X
+    vec3(1.0, 0.0, 0.0), // Back (-Z): Height along X
+    vec3(0.0, 1.0, 0.0), // Left (-X): Height along Y
+    vec3(0.0, 1.0, 0.0), // Right (+X): Height along Y
+    vec3(1.0, 0.0, 0.0), // Top (+Y): Height along X
+    vec3(1.0, 0.0, 0.0)  // Bottom (-Y): Height along X
+);
+
+const vec3 face_V_direction[6] = vec3[]( // Direction for dimensionW (width, maps to a_baseVertexPos.x)
+    vec3(0.0, 1.0, 0.0), // Front (+Z): Width along Y
+    vec3(0.0, 1.0, 0.0), // Back (-Z): Width along Y
+    vec3(0.0, 0.0, 1.0), // Left (-X): Width along Z
+    vec3(0.0, 0.0, 1.0), // Right (+X): Width along Z
+    vec3(0.0, 0.0, 1.0), // Top (+Y): Width along Z
+    vec3(0.0, 0.0, 1.0)  // Bottom (-Y): Width along Z
+);
+
 
 void main()
 {
-    // Transform vertex position to world space
-    vec4 worldPosition4 = modelMatrix * vec4(a_position, 1.0);
-    v_worldPosition = worldPosition4.xyz;
+    uint nID = uint(i_normalID_float); // Convert from float
+    uint bID = uint(i_blockTypeID_float); // Convert from float
 
-    // Calculate the final clip space position
+    nID = clamp(nID, 0u, 5u); // Safety clamp
+
+    vec3 N_modelSpace = normals[nID];
+    vec3 U_dir_modelSpace = face_U_direction[nID]; // Direction of quad's height dimension (corresponds to i_dimensions.x)
+    vec3 V_dir_modelSpace = face_V_direction[nID]; // Direction of quad's width dimension (corresponds to i_dimensions.y)
+
+    // a_baseVertexPos.x is for the horizontal extent of the base quad (0-1)
+    // a_baseVertexPos.y is for the vertical extent of the base quad (0-1)
+    // i_dimensions.x is quadHeight (H)
+    // i_dimensions.y is quadWidth (W)
+    vec3 quadPointOffset = (V_dir_modelSpace * a_baseVertexPos.x * i_dimensions.y) + // Scale horizontal by quadWidth (i_dimensions.y)
+                           (U_dir_modelSpace * a_baseVertexPos.y * i_dimensions.x);  // Scale vertical by quadHeight (i_dimensions.x)
+
+    vec3 finalPosition_inChunk = i_origin + quadPointOffset;
+
+    // Transform to world and clip space
+    vec4 worldPosition4 = modelMatrix * vec4(finalPosition_inChunk, 1.0);
+    v_worldPosition = worldPosition4.xyz;
     gl_Position = projectionMatrix * viewMatrix * worldPosition4;
 
-    // Reconstruct the normal vector from its ID
-    // Clamp a_normalID to be safe, though it should always be in [0, 5]
-    uint normalIndex = clamp(a_normalID, 0u, 5u);
-    vec3 modelNormal = normals[normalIndex];
-
     // Transform normal to world space
-    // Use the inverse transpose of the model matrix for normals if non-uniform scaling is possible.
-    // If modelMatrix only involves rotation and uniform scaling, mat3(modelMatrix) is fine.
-    v_normal = normalize(mat3(transpose(inverse(modelMatrix))) * modelNormal);
-    // For simpler cases (only uniform scale/rotation):
-    // v_normal = normalize(mat3(modelMatrix) * modelNormal);
+    v_normal = normalize(mat3(transpose(inverse(modelMatrix))) * N_modelSpace);
 
-    // Pass the block type ID to the fragment shader
-    v_blockTypeID = a_blockTypeID;
+    v_blockTypeID = bID;
 }
