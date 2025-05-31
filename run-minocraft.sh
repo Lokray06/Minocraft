@@ -1,0 +1,3 @@
+#!/bin/bash
+export _GLFW_WAYLAND=0
+exec java -cp target/classes:~/.m2/repository/org/lwjgl/lwjgl/3.3.3/lwjgl-3.3.3.jar:~/.m2/repository/org/lwjgl/lwjgl-glfw/3.3.3/lwjgl-glfw-3.3.3.jar:~/.m2/repository/org/lwjgl/lwjgl-opengl/3.3.3/lwjgl-opengl-3.3.3.jar:~/.m2/repository/org/joml/joml/1.10.8/joml-1.10.8.jar:~/.m2/repository/org/lwjgl/lwjgl/3.3.3/lwjgl-3.3.3-natives-linux.jar:~/.m2/repository/org/lwjgl/lwjgl-glfw/3.3.3/lwjgl-glfw-3.3.3-natives-linux.jar:~/.m2/repository/org/lwjgl/lwjgl-opengl/3.3.3/lwjgl-opengl-3.3.3-natives-linux.jar com.juanpa.game.Main
