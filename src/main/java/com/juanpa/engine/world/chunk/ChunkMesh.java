@@ -1,3 +1,4 @@
+// Modify: com/juanpa/engine/world/chunk/ChunkMesh.java
 package com.juanpa.engine.world.chunk;
 
 import com.juanpa.engine.Debug;
@@ -8,169 +9,97 @@ import org.lwjgl.opengl.GL30;
 import org.lwjgl.system.MemoryUtil;
 
 import java.nio.FloatBuffer;
-import java.util.ArrayList;
-import java.util.List;
+import java.nio.ByteBuffer; // Import ByteBuffer
+import java.util.List; // Keep List, but parameters to generateMeshData will change
 
 public class ChunkMesh
 {
     private int vaoID;
-    private int vboID; // For positions
-    private int normalVboID; // VBO for normals
-    private int vertexCount; // Current vertex count on the GPU
+    private int vboPositionsID; // VBO for positions
+    private int vboNormalsID;   // VBO for compressed normal IDs
+    private int vboBlockTypesID; // VBO for block types
+    private int vertexCount;
 
     private static final short BLOCK_TYPE_AIR_ID = 0;
 
-    // We'll define a set of static quads for each face, relative to a (0,0,0) origin block
-    // and then apply offset and rotation/normal depending on the face.
-    // Each quad has 6 vertices (2 triangles)
-    // Front face (Z+): Vertices for the face at Z=1 for a unit cube
-    private static final float[] QUAD_VERTICES_FRONT = { 0.0f, 0.0f, 1.0f, // BL
-            1.0f, 0.0f, 1.0f, // BR
-            1.0f, 1.0f, 1.0f, // TR
-            1.0f, 1.0f, 1.0f, // TR (Duplicate for second triangle)
-            0.0f, 1.0f, 1.0f, // TL
-            0.0f, 0.0f, 1.0f // BL (Duplicate for second triangle)
-    };
-    private static final float[] NORMAL_FRONT = { 0.0f, 0.0f, 1.0f };
+    // Face normal templates (remains the same)
+    private static final float[] NORMAL_FRONT = { 0.0f, 0.0f, 1.0f }; // ID 0
+    private static final float[] NORMAL_BACK = { 0.0f, 0.0f, -1.0f };  // ID 1
+    private static final float[] NORMAL_LEFT = { -1.0f, 0.0f, 0.0f };  // ID 2
+    private static final float[] NORMAL_RIGHT = { 1.0f, 0.0f, 0.0f }; // ID 3
+    private static final float[] NORMAL_TOP = { 0.0f, 1.0f, 0.0f };    // ID 4
+    private static final float[] NORMAL_BOTTOM = { 0.0f, -1.0f, 0.0f };// ID 5
 
-    // Back face (Z-): Vertices for the face at Z=0
-    private static final float[] QUAD_VERTICES_BACK = { 0.0f, 0.0f, 0.0f, // BL
-            0.0f, 1.0f, 0.0f, // TL
-            1.0f, 1.0f, 0.0f, // TR
-            1.0f, 1.0f, 0.0f, // TR (Duplicate for second triangle)
-            1.0f, 0.0f, 0.0f, // BR
-            0.0f, 0.0f, 0.0f // BL (Duplicate for second triangle)
-    };
-    private static final float[] NORMAL_BACK = { 0.0f, 0.0f, -1.0f };
+    // Quad vertices templates (remains the same)
+    private static final float[] QUAD_VERTICES_FRONT = { 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f };
+    private static final float[] QUAD_VERTICES_BACK = { 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+    private static final float[] QUAD_VERTICES_LEFT = { 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f };
+    private static final float[] QUAD_VERTICES_RIGHT = { 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f };
+    private static final float[] QUAD_VERTICES_TOP = { 0.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f, 0.0f };
+    private static final float[] QUAD_VERTICES_BOTTOM = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
 
-    // Left face (X-): Vertices for the face at X=0
-    private static final float[] QUAD_VERTICES_LEFT = { 0.0f, 0.0f, 0.0f, // BL
-            0.0f, 1.0f, 0.0f, // TL
-            0.0f, 1.0f, 1.0f, // TR
-            0.0f, 1.0f, 1.0f, // TR (Duplicate for second triangle)
-            0.0f, 0.0f, 1.0f, // BR
-            0.0f, 0.0f, 0.0f // BL (Duplicate for second triangle)
-    };
-    private static final float[] NORMAL_LEFT = { -1.0f, 0.0f, 0.0f };
 
-    // Right face (X+): Vertices for the face at X=1
-    private static final float[] QUAD_VERTICES_RIGHT = { 1.0f, 0.0f, 0.0f, // BL
-            1.0f, 0.0f, 1.0f, // BR
-            1.0f, 1.0f, 1.0f, // TR
-            1.0f, 1.0f, 1.0f, // TR (Duplicate for second triangle)
-            1.0f, 1.0f, 0.0f, // TL
-            1.0f, 0.0f, 0.0f // BL (Duplicate for second triangle)
-    };
-    private static final float[] NORMAL_RIGHT = { 1.0f, 0.0f, 0.0f };
-
-    // Top face (Y+): Vertices for the face at Y=1
-    private static final float[] QUAD_VERTICES_TOP = { 0.0f, 1.0f, 0.0f, // BL
-            1.0f, 1.0f, 0.0f, // BR
-            1.0f, 1.0f, 1.0f, // TR
-            1.0f, 1.0f, 1.0f, // TR (Duplicate for second triangle)
-            0.0f, 1.0f, 1.0f, // TL
-            0.0f, 1.0f, 0.0f // BL (Duplicate for second triangle)
-    };
-    private static final float[] NORMAL_TOP = { 0.0f, 1.0f, 0.0f };
-
-    // Bottom face (Y-): Vertices for the face at Y=0
-    private static final float[] QUAD_VERTICES_BOTTOM = { 0.0f, 0.0f, 0.0f, // BL
-            0.0f, 0.0f, 1.0f, // TL
-            1.0f, 0.0f, 1.0f, // TR
-            1.0f, 0.0f, 1.0f, // TR (Duplicate for second triangle)
-            1.0f, 0.0f, 0.0f, // BR
-            0.0f, 0.0f, 0.0f // BL (Duplicate for second triangle)
-    };
-    private static final float[] NORMAL_BOTTOM = { 0.0f, -1.0f, 0.0f };
-
-    // Constructor: Only initializes GL objects, no data yet.
     public ChunkMesh()
     {
         this.vaoID = GL30.glGenVertexArrays();
-        Debug.checkGLError("ChunkMesh: glGenVertexArrays (Constructor)");
-        this.vboID = GL15.glGenBuffers(); // For positions
-        Debug.checkGLError("ChunkMesh: glGenBuffers (VBO) (Constructor)");
-        this.normalVboID = GL15.glGenBuffers(); // For normals
-        Debug.checkGLError("ChunkMesh: glGenBuffers (Normal VBO) (Constructor)");
+        Debug.checkGLError("ChunkMesh: glGenVertexArrays");
+        this.vboPositionsID = GL15.glGenBuffers();
+        Debug.checkGLError("ChunkMesh: glGenBuffers (Positions VBO)");
+        this.vboNormalsID = GL15.glGenBuffers();
+        Debug.checkGLError("ChunkMesh: glGenBuffers (Normals VBO)");
+        this.vboBlockTypesID = GL15.glGenBuffers();
+        Debug.checkGLError("ChunkMesh: glGenBuffers (BlockTypes VBO)");
+    }
+
+    // Helper to convert float normal to byte ID
+    private byte encodeNormal(float[] normal) {
+        if (normal == NORMAL_FRONT) return 0;
+        if (normal == NORMAL_BACK) return 1;
+        if (normal == NORMAL_LEFT) return 2;
+        if (normal == NORMAL_RIGHT) return 3;
+        if (normal == NORMAL_TOP) return 4;
+        if (normal == NORMAL_BOTTOM) return 5;
+        return 0; // Default/error
     }
 
     /**
-     * Generates the mesh data (vertices and normals) for a chunk using greedy meshing. This is a CPU-intensive operation and should ideally run on a background thread.
-     *
-     * @param rawChunkData The Chunk object containing the block data.
-     * @param positions List to populate with vertex positions.
-     * @param normals List to populate with vertex normals.
+     * Generates mesh data. Populates the provided lists.
+     * @param rawChunkData The Chunk object.
+     * @param outPositions List to populate with vertex positions (floats).
+     * @param outNormalIDs List to populate with compressed normal IDs (bytes).
+     * @param outBlockTypes List to populate with block type IDs (bytes).
      */
-    public void generateMeshData(Chunk rawChunkData, List<Float> positions, List<Float> normals)
+    public void generateMeshData(Chunk rawChunkData, List<Float> outPositions, List<Byte> outNormalIDs, List<Byte> outBlockTypes)
     {
-        positions.clear();
-        normals.clear();
+        outPositions.clear();
+        outNormalIDs.clear();
+        outBlockTypes.clear();
 
-        short[][][] blocks = rawChunkData.blocks; // Direct access to block data
+        short[][][] blocks = rawChunkData.blocks;
 
-        // Iterate over each axis (X, Y, Z) and direction (+/-)
-        // This process needs to be done for each of the 3 axes (X, Y, Z).
-        // For each axis, we sweep twice (once for positive, once for negative direction).
-
-        // Sweep along X-axis
-        greedyMesh(blocks, positions, normals, 0, 1, 2, // axis (0=X, 1=Y, 2=Z), u-dim (Y), v-dim (Z)
-                QUAD_VERTICES_RIGHT, NORMAL_RIGHT); // +X faces
-        greedyMesh(blocks, positions, normals, 0, 1, 2, // axis, u-dim, v-dim
-                QUAD_VERTICES_LEFT, NORMAL_LEFT); // -X faces
-
-        // Sweep along Y-axis
-        greedyMesh(blocks, positions, normals, 1, 0, 2, // axis (1=Y), u-dim (X), v-dim (Z)
-                QUAD_VERTICES_TOP, NORMAL_TOP); // +Y faces
-        greedyMesh(blocks, positions, normals, 1, 0, 2, // axis, u-dim, v-dim
-                QUAD_VERTICES_BOTTOM, NORMAL_BOTTOM); // -Y faces
-
-        // Sweep along Z-axis
-        greedyMesh(blocks, positions, normals, 2, 0, 1, // axis (2=Z), u-dim (X), v-dim (Y)
-                QUAD_VERTICES_FRONT, NORMAL_FRONT); // +Z faces
-        greedyMesh(blocks, positions, normals, 2, 0, 1, // axis, u-dim, v-dim
-                QUAD_VERTICES_BACK, NORMAL_BACK); // -Z faces
+        greedyMesh(blocks, outPositions, outNormalIDs, outBlockTypes, 0, 1, 2, QUAD_VERTICES_RIGHT, NORMAL_RIGHT);
+        greedyMesh(blocks, outPositions, outNormalIDs, outBlockTypes, 0, 1, 2, QUAD_VERTICES_LEFT, NORMAL_LEFT);
+        greedyMesh(blocks, outPositions, outNormalIDs, outBlockTypes, 1, 0, 2, QUAD_VERTICES_TOP, NORMAL_TOP);
+        greedyMesh(blocks, outPositions, outNormalIDs, outBlockTypes, 1, 0, 2, QUAD_VERTICES_BOTTOM, NORMAL_BOTTOM);
+        greedyMesh(blocks, outPositions, outNormalIDs, outBlockTypes, 2, 0, 1, QUAD_VERTICES_FRONT, NORMAL_FRONT);
+        greedyMesh(blocks, outPositions, outNormalIDs, outBlockTypes, 2, 0, 1, QUAD_VERTICES_BACK, NORMAL_BACK);
     }
 
-    private void greedyMesh(short[][][] blocks, List<Float> positions, List<Float> normals, int axis, int u_axis, int v_axis, float[] faceVerticesTemplate, float[] faceNormalTemplate)
+    private void greedyMesh(short[][][] blocks, List<Float> outPositions, List<Byte> outNormalIDs, List<Byte> outBlockTypes,
+                            int axis, int u_axis, int v_axis,
+                            float[] faceVerticesTemplate, float[] faceNormalTemplate)
     {
-
         int i_axis_size = Chunk.CHUNK_SIZE;
         int u_axis_size = Chunk.CHUNK_SIZE;
         int v_axis_size = Chunk.CHUNK_SIZE;
+        short[][] mask = new short[u_axis_size][v_axis_size]; // Stores block type for visible faces
 
-        // Mask to store block types for the current slice
-        short[][] mask = new short[u_axis_size][v_axis_size];
+        byte currentNormalID = encodeNormal(faceNormalTemplate);
 
-        // --- Log 1: Start of greedyMesh pass ---
-        // Identify the normal direction for clarity
-        String normalDir = "";
-        if (faceNormalTemplate[0] == 1.0f)
-            normalDir = "+X";
-        else if (faceNormalTemplate[0] == -1.0f)
-            normalDir = "-X";
-        else if (faceNormalTemplate[1] == 1.0f)
-            normalDir = "+Y";
-        else if (faceNormalTemplate[1] == -1.0f)
-            normalDir = "-Y";
-        else if (faceNormalTemplate[2] == 1.0f)
-            normalDir = "+Z";
-        else if (faceNormalTemplate[2] == -1.0f)
-            normalDir = "-Z";
-        // Debug.log("--- Starting greedyMesh pass for Normal: " + normalDir + " (Axis: " + axis + ", U-axis: " + u_axis + ", V-axis: " + v_axis + ") ---");
-
-        // i represents the current slice along the 'axis'
-        for (int i = 0; i < i_axis_size; i++)
-        {
-            // --- Log 2: Current slice ---
-            // Debug.log("Processing slice 'i' (along axis " + axis + "): " + i);
-
-            // Build mask for the current slice
-            for (int u = 0; u < u_axis_size; u++)
-            {
-                for (int v = 0; v < v_axis_size; v++)
-                {
-                    // Map i, u, v to their respective world-space block coordinates (currX, currY, currZ)
-                    int[] currBlockCoords = new int[3]; // [X, Y, Z]
+        for (int i = 0; i < i_axis_size; i++) {
+            for (int u = 0; u < u_axis_size; u++) {
+                for (int v = 0; v < v_axis_size; v++) {
+                    int[] currBlockCoords = new int[3];
                     currBlockCoords[axis] = i;
                     currBlockCoords[u_axis] = u;
                     currBlockCoords[v_axis] = v;
@@ -185,88 +114,49 @@ public class ChunkMesh
                     short currentBlock = getBlockSafe(blocks, currX, currY, currZ);
                     short adjacentBlock = getBlockSafe(blocks, nextX, nextY, nextZ);
 
-                    if (currentBlock != BLOCK_TYPE_AIR_ID && adjacentBlock == BLOCK_TYPE_AIR_ID)
-                    {
-                        mask[u][v] = currentBlock;
-                    } else
-                    {
+                    if (currentBlock != BLOCK_TYPE_AIR_ID && adjacentBlock == BLOCK_TYPE_AIR_ID) {
+                        mask[u][v] = currentBlock; // Store the type of the block whose face is visible
+                    } else {
                         mask[u][v] = BLOCK_TYPE_AIR_ID;
                     }
                 }
             }
 
-            // --- Log 4: Print the generated mask for the current slice ---
-            StringBuilder maskDebug = new StringBuilder("Mask for slice 'i'=" + i + " (Normal: " + normalDir + "):\n");
-            for (int u = 0; u < u_axis_size; u++)
-            {
-                for (int v = 0; v < v_axis_size; v++)
-                {
-                    maskDebug.append(mask[u][v] == BLOCK_TYPE_AIR_ID ? "_" : "X"); // X for solid, _ for air
-                }
-                maskDebug.append("\n");
-            }
-            // Debug.log(maskDebug.toString());
+            for (int u = 0; u < u_axis_size; u++) {
+                for (int v = 0; v < v_axis_size;) {
+                    short blockTypeForFace = mask[u][v]; // This is the type of the block creating the face
 
-            // Iterate through the mask to find quads
-            for (int u = 0; u < u_axis_size; u++)
-            {
-                for (int v = 0; v < v_axis_size;)
-                { // Notice: v is not incremented here
-                    short blockType = mask[u][v];
-
-                    if (blockType != BLOCK_TYPE_AIR_ID)
-                    { // Found a potential face
-                        // Greedily expand in 'v' direction (width)
+                    if (blockTypeForFace != BLOCK_TYPE_AIR_ID) {
                         int width = 1;
-                        while (v + width < v_axis_size && mask[u][v + width] == blockType)
-                        {
+                        while (v + width < v_axis_size && mask[u][v + width] == blockTypeForFace) {
                             width++;
                         }
 
-                        // Greedily expand in 'u' direction (height)
                         int height = 1;
                         boolean canExpandHeight = true;
-                        while (u + height < u_axis_size && canExpandHeight)
-                        {
-                            for (int k = 0; k < width; k++)
-                            {
-                                if (mask[u + height][v + k] != blockType)
-                                {
+                        while (u + height < u_axis_size && canExpandHeight) {
+                            for (int k = 0; k < width; k++) {
+                                if (mask[u + height][v + k] != blockTypeForFace) {
                                     canExpandHeight = false;
                                     break;
                                 }
                             }
-                            if (canExpandHeight)
-                            {
+                            if (canExpandHeight) {
                                 height++;
                             }
                         }
 
-                        // --- Log 5: Discovered Quad ---
-                        // Debug.log("  Discovered Quad at mask[" + u + "][" + v + "] (blockType: " + blockType + ")");
-                        // Debug.log("    Dimensions: Width = " + width + ", Height = " + height);
-                        // Debug.log("    Calling addGreedyQuad with i_coord=" + i + ", u_coord=" + u + ", v_coord=" + v);
+                        addGreedyQuad(outPositions, outNormalIDs, outBlockTypes,
+                                faceVerticesTemplate, currentNormalID, (byte) blockTypeForFace,
+                                i, u, v, width, height, axis, u_axis, v_axis);
 
-                        // Add its vertices and normals
-                        addGreedyQuad(positions, normals, faceVerticesTemplate, faceNormalTemplate, i, u, v, // i = block position along axis, u = start u-coord, v = start v-coord
-                                width, height, // dimensions of the merged quad
-                                axis, u_axis, v_axis); // axes info
-
-                        // Clear the mask for the found quad to prevent reprocessing
-                        for (int eu = u; eu < u + height; eu++)
-                        {
-                            for (int ev = v; ev < v + width; ev++)
-                            {
+                        for (int eu = u; eu < u + height; eu++) {
+                            for (int ev = v; ev < v + width; ev++) {
                                 mask[eu][ev] = BLOCK_TYPE_AIR_ID;
                             }
                         }
-
-                        // Advance 'v' by the width of the merged quad
                         v += width;
-
-                    } else
-                    {
-                        // If no block found, just advance v by 1
+                    } else {
                         v++;
                     }
                 }
@@ -274,55 +164,58 @@ public class ChunkMesh
         }
     }
 
-    /**
-     * Safely gets a block from the blocks array, returning AIR if out of bounds.
-     */
-    private short getBlockSafe(short[][][] blocks, int x, int y, int z)
-    {
-        if (x < 0 || x >= Chunk.CHUNK_SIZE || y < 0 || y >= Chunk.CHUNK_SIZE || z < 0 || z >= Chunk.CHUNK_SIZE)
-        {
-            return BLOCK_TYPE_AIR_ID; // Treat out-of-bounds as air for culling
+    private short getBlockSafe(short[][][] blocks, int x, int y, int z) {
+        if (x < 0 || x >= Chunk.CHUNK_SIZE || y < 0 || y >= Chunk.CHUNK_SIZE || z < 0 || z >= Chunk.CHUNK_SIZE) {
+            return BLOCK_TYPE_AIR_ID;
         }
         return blocks[x][y][z];
     }
 
-    /**
-     * Adds the vertices and normals for a greedily merged quad. The faceVerticesTemplate defines the shape of a unit quad (0-1 range). We scale it by width/height and translate it to its correct world position.
-     */
-    private void addGreedyQuad(List<Float> positions, List<Float> normals, float[] faceVerticesTemplate, float[] faceNormalTemplate, int i_coord, int u_coord, int v_coord, int width, int height, int axis, int u_axis, int v_axis)
+    private void addGreedyQuad(List<Float> positions, List<Byte> normalIDs, List<Byte> blockTypes,
+                               float[] faceVerticesTemplate, byte normalID, byte blockType,
+                               int i_coord, int u_coord, int v_coord, int width, int height,
+                               int axis, int u_axis, int v_axis)
     {
-        // --- Log 7: Start of addGreedyQuad for a quad ---
-        // Debug.log("  addGreedyQuad called: i=" + i_coord + ", u=" + u_coord + ", v=" + v_coord + ", width=" + width + ", height=" + height + ", Normal=(" + faceNormalTemplate[0] + ", " + faceNormalTemplate[1] + ", " + faceNormalTemplate[2] + ")");
+        // The normal and blockType are the same for all 6 vertices of this quad
+        float normalXForFixedCoord = 0, normalYForFixedCoord = 0, normalZForFixedCoord = 0;
+        // Decode normalID to get the float vector for fixed coordinate calculation
+        // This is a bit clunky but mirrors the logic in your original faceNormalTemplate usage for positioning
+        if (normalID == 0) { normalZForFixedCoord = 1.0f; } // FRONT
+        else if (normalID == 1) { normalZForFixedCoord = -1.0f; } // BACK
+        else if (normalID == 2) { normalXForFixedCoord = -1.0f; } // LEFT
+        else if (normalID == 3) { normalXForFixedCoord = 1.0f; } // RIGHT
+        else if (normalID == 4) { normalYForFixedCoord = 1.0f; } // TOP
+        else if (normalID == 5) { normalYForFixedCoord = -1.0f; } // BOTTOM
 
-        for (int j = 0; j < faceVerticesTemplate.length; j += 3)
-        {
+
+        for (int j = 0; j < faceVerticesTemplate.length; j += 3) {
             float vx = faceVerticesTemplate[j];
             float vy = faceVerticesTemplate[j + 1];
             float vz = faceVerticesTemplate[j + 2];
 
-            // Scale and translate the quad vertex based on axis and dimensions
             float finalX = 0, finalY = 0, finalZ = 0;
 
             // Determine the "fixed" coordinate based on the normal and i_coord
-            // For example, if Normal=(0,0,1) (+Z face), the Z coordinate is i_coord + 1.0f
-            // If Normal=(0,0,-1) (-Z face), the Z coordinate is i_coord + 0.0f
-            float fixedCoord = i_coord + (faceNormalTemplate[axis] == 1.0f ? 1.0f : 0.0f);
+            // If normal points along +axis, fixed coord is i_coord + 1. Else, it's i_coord.
+            float fixedCoordOffset = 0;
+            if (axis == 0 && normalXForFixedCoord > 0) fixedCoordOffset = 1.0f; // Right face
+            else if (axis == 1 && normalYForFixedCoord > 0) fixedCoordOffset = 1.0f; // Top face
+            else if (axis == 2 && normalZForFixedCoord > 0) fixedCoordOffset = 1.0f; // Front face
 
-            // The U and V coordinates are scaled by width/height relative to their origin (u_coord, v_coord)
-            if (axis == 0)
-            { // Sweeping along X-axis (u_axis=Y, v_axis=Z)
+            float fixedCoord = i_coord + fixedCoordOffset;
+
+
+            if (axis == 0) { // Sweeping along X-axis (u_axis=Y, v_axis=Z)
                 finalX = fixedCoord;
-                finalY = u_coord + vy * height; // vy (template U) is scaled by height (quad's U-extent)
-                finalZ = v_coord + vz * width; // vz (template V) is scaled by width (quad's V-extent)
-            } else if (axis == 1)
-            { // Sweeping along Y-axis (u_axis=X, v_axis=Z)
-                finalX = u_coord + vx * height; // vx (template U) is scaled by height (quad's U-extent)
+                finalY = u_coord + vy * height;
+                finalZ = v_coord + vz * width;
+            } else if (axis == 1) { // Sweeping along Y-axis (u_axis=X, v_axis=Z)
+                finalX = u_coord + vx * height;
                 finalY = fixedCoord;
-                finalZ = v_coord + vz * width; // vz (template V) is scaled by width (quad's V-extent)
-            } else if (axis == 2)
-            { // Sweeping along Z-axis (u_axis=X, v_axis=Y)
-                finalX = u_coord + vx * height; // vx (template U) is scaled by height (quad's U-extent)
-                finalY = v_coord + vy * width; // vy (template V) is scaled by width (quad's V-extent)
+                finalZ = v_coord + vz * width;
+            } else if (axis == 2) { // Sweeping along Z-axis (u_axis=X, v_axis=Y)
+                finalX = u_coord + vx * height;
+                finalY = v_coord + vy * width;
                 finalZ = fixedCoord;
             }
 
@@ -330,101 +223,106 @@ public class ChunkMesh
             positions.add(finalY);
             positions.add(finalZ);
 
-            // Normals are constant for the entire quad
-            normals.add(faceNormalTemplate[0]);
-            normals.add(faceNormalTemplate[1]);
-            normals.add(faceNormalTemplate[2]);
-
-            // --- Log 8 (Optional, highly verbose): Individual Vertex Coordinates ---
-            // Debug.log("    Vertex (" + (j / 3) + ") original (" + vx + ", " + vy + ", " + vz + ") -> final (" + finalX + ", " + finalY + ", " + finalZ + ")");
+            normalIDs.add(normalID);
+            blockTypes.add(blockType);
         }
     }
 
+
     /**
-     * Uploads the generated mesh data (vertices and normals) to the GPU. This method contains OpenGL calls and MUST be called on the main rendering thread.
-     *
-     * @param vertices The float array containing vertex position data.
-     * @param normals The float array containing vertex normal data.
+     * Uploads mesh data to GPU.
+     * @param finalPositions Array of vertex positions.
+     * @param finalNormalIDs Array of normal IDs.
+     * @param finalBlockTypes Array of block type IDs.
      */
-    public void uploadToGPU(float[] vertices, float[] normals)
+    public void uploadToGPU(float[] finalPositions, byte[] finalNormalIDs, byte[] finalBlockTypes)
     {
-        FloatBuffer verticesBuffer = null;
-        FloatBuffer normalsBuffer = null;
-        try
-        {
-            this.vertexCount = vertices.length / 3;
+        FloatBuffer positionsBuffer = null;
+        ByteBuffer normalIDsBuffer = null;
+        ByteBuffer blockTypesBuffer = null;
+        try {
+            this.vertexCount = finalPositions.length / 3;
+            if (this.vertexCount == 0) {
+                return; // No data to upload
+            }
 
-            verticesBuffer = MemoryUtil.memAllocFloat(vertices.length);
-            verticesBuffer.put(vertices).flip();
+            positionsBuffer = MemoryUtil.memAllocFloat(finalPositions.length);
+            positionsBuffer.put(finalPositions).flip();
 
-            normalsBuffer = MemoryUtil.memAllocFloat(normals.length);
-            normalsBuffer.put(normals).flip();
+            normalIDsBuffer = MemoryUtil.memAlloc(finalNormalIDs.length);
+            normalIDsBuffer.put(finalNormalIDs).flip();
+
+            blockTypesBuffer = MemoryUtil.memAlloc(finalBlockTypes.length);
+            blockTypesBuffer.put(finalBlockTypes).flip();
 
             GL30.glBindVertexArray(this.vaoID);
 
-            // Bind and upload vertex position data to VBO
-            GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, this.vboID);
-            GL15.glBufferData(GL15.GL_ARRAY_BUFFER, verticesBuffer, GL15.GL_STATIC_DRAW);
+            // Positions VBO (Attribute 0)
+            GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, this.vboPositionsID);
+            GL15.glBufferData(GL15.GL_ARRAY_BUFFER, positionsBuffer, GL15.GL_STATIC_DRAW);
             GL20.glVertexAttribPointer(0, 3, GL11.GL_FLOAT, false, 0, 0);
 
-            // Bind and upload normal data to a separate VBO
-            GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, this.normalVboID);
-            GL15.glBufferData(GL15.GL_ARRAY_BUFFER, normalsBuffer, GL15.GL_STATIC_DRAW);
-            GL20.glVertexAttribPointer(1, 3, GL11.GL_FLOAT, false, 0, 0);
+            // Normal IDs VBO (Attribute 1) - as integers
+            GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, this.vboNormalsID);
+            GL15.glBufferData(GL15.GL_ARRAY_BUFFER, normalIDsBuffer, GL15.GL_STATIC_DRAW);
+            GL30.glVertexAttribIPointer(1, 1, GL11.GL_UNSIGNED_BYTE, 0, 0); // Use IPointer for integer attributes
+
+            // Block Types VBO (Attribute 2) - as integers
+            GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, this.vboBlockTypesID);
+            GL15.glBufferData(GL15.GL_ARRAY_BUFFER, blockTypesBuffer, GL15.GL_STATIC_DRAW);
+            GL30.glVertexAttribIPointer(2, 1, GL11.GL_UNSIGNED_BYTE, 0, 0); // Use IPointer for integer attributes
+
 
             GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
             GL30.glBindVertexArray(0);
 
             Debug.checkGLError("ChunkMesh: uploadToGPU");
 
-        } finally
-        {
-            if (verticesBuffer != null)
-                MemoryUtil.memFree(verticesBuffer);
-            if (normalsBuffer != null)
-                MemoryUtil.memFree(normalsBuffer);
+        } finally {
+            if (positionsBuffer != null) MemoryUtil.memFree(positionsBuffer);
+            if (normalIDsBuffer != null) MemoryUtil.memFree(normalIDsBuffer);
+            if (blockTypesBuffer != null) MemoryUtil.memFree(blockTypesBuffer);
         }
     }
 
-    public void bind()
-    {
+    public void bind() {
         GL30.glBindVertexArray(this.vaoID);
-        GL20.glEnableVertexAttribArray(0);
-        GL20.glEnableVertexAttribArray(1);
+        GL20.glEnableVertexAttribArray(0); // Position
+        GL20.glEnableVertexAttribArray(1); // Normal ID
+        GL20.glEnableVertexAttribArray(2); // Block Type ID
     }
 
-    public void render()
-    {
-        if (this.vertexCount > 0)
-        {
+    public void render() {
+        if (this.vertexCount > 0) {
             GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, this.vertexCount);
         }
     }
 
-    public void unbind()
-    {
+    public void unbind() {
         GL20.glDisableVertexAttribArray(0);
         GL20.glDisableVertexAttribArray(1);
+        GL20.glDisableVertexAttribArray(2);
         GL30.glBindVertexArray(0);
     }
 
-    public void cleanup()
-    {
-        if (vaoID != 0)
-        {
+    public void cleanup() {
+        if (vaoID != 0) {
             GL30.glBindVertexArray(0);
             GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
 
             GL20.glDisableVertexAttribArray(0);
             GL20.glDisableVertexAttribArray(1);
+            GL20.glDisableVertexAttribArray(2);
 
-            GL15.glDeleteBuffers(vboID);
-            GL15.glDeleteBuffers(normalVboID);
+            GL15.glDeleteBuffers(vboPositionsID);
+            GL15.glDeleteBuffers(vboNormalsID);
+            GL15.glDeleteBuffers(vboBlockTypesID);
             GL30.glDeleteVertexArrays(vaoID);
 
             vaoID = 0;
-            vboID = 0;
-            normalVboID = 0;
+            vboPositionsID = 0;
+            vboNormalsID = 0;
+            vboBlockTypesID = 0;
             vertexCount = 0;
         }
     }
