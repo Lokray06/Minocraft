@@ -61,7 +61,7 @@ public class Camera extends Component
 	}
 
 	@Override
-	public void onUpdate()
+	public void update()
 	{
 		if(!isMainCamera)
 		{

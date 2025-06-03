@@ -28,8 +28,6 @@ public class Renderer
 		Skybox.init(); // Assuming Skybox is separate
 		GL11.glClearColor(0.02f, 0.0f, 0.1f, 1f);
 		GL11.glEnable(GL11.GL_DEPTH_TEST);
-		// GL11.glEnable(GL11.GL_CULL_FACE); // Optional: Good for performance
-		// GL11.glCullFace(GL11.GL_BACK);
 
 		defaultShader = new ShaderProgram("/shaders/main.vert", "/shaders/main.frag");
 		Debug.logInfo("Renderer initialized.");

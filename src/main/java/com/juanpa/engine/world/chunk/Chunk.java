@@ -119,28 +119,28 @@ public class Chunk
 		int worldStartY = chunkCoords.y * CHUNK_SIZE;
 		int worldStartZ = chunkCoords.z * CHUNK_SIZE;
 
-		final short BLOCK_AIR = World.BLOCK_TYPE_AIR_ID; // Use short for direct comparison
-		final short BLOCK_DIRT = World.BLOCK_TYPE_SOLID_ID; // Assuming solid is dirt for now
+		final short BLOCK_AIR = World.BLOCK_TYPE_AIR_ID;
+		final short BLOCK_DIRT = World.BLOCK_TYPE_SOLID_ID;
 		final short BLOCK_GRASS = World.BLOCK_TYPE_GRASS_ID;
 		final short BLOCK_STONE = World.BLOCK_TYPE_STONE_ID;
-		final short BLOCK_BEDROCK = 4; // Define bedrock ID, ensure it's in World constants too
+		final short BLOCK_BEDROCK = 4; // Ensure this ID is consistent with World constants
 
-		final int NUM_OCTAVES = 6;
-		final float LACUNARITY = 2.0f;
-		final float PERSISTENCE = 0.5f;
-		final float INITIAL_FREQUENCY = 0.005f;
-		final float HEIGHT_SCALE = 80.0f;
-		final int BASE_SEA_LEVEL = 60;
+		// Noise parameters for height generation
+		final int NUM_OCTAVES = 8; // More octaves create more detailed terrain
+		final float LACUNARITY = 2.0f; // How quickly frequency increases per octave (causes detail)
+		final float PERSISTENCE = 0.5f; // How quickly amplitude decreases per octave (causes detail)
+		final float INITIAL_FREQUENCY = 0.002f; // Controls the "largeness" of features
+		final float HEIGHT_SCALE = 100.0f; // Maximum height variation
+		final int BASE_SEA_LEVEL = 50; // The base height of the terrain, like sea level
 
+		// Layer thicknesses
 		final int GRASS_LAYER_THICKNESS = 1;
-		final int DIRT_LAYER_THICKNESS = 4;
-		final int BEDROCK_THICKNESS = 1;
+		final int DIRT_LAYER_THICKNESS = 3; // Slightly thinner dirt layer
+		final int BEDROCK_THICKNESS = 4; // Make bedrock thicker at the very bottom
 
-		FastNoiseLite noiseGenerator;
-
-		noiseGenerator = new FastNoiseLite((int) Game.seed);
+		FastNoiseLite noiseGenerator = new FastNoiseLite((int) Game.seed);
 		noiseGenerator.SetNoiseType(FastNoiseLite.NoiseType.Perlin);
-		noiseGenerator.SetFractalType(FastNoiseLite.FractalType.FBm);
+		noiseGenerator.SetFractalType(FastNoiseLite.FractalType.FBm); // Fractal Brownian Motion
 		noiseGenerator.SetFractalOctaves(NUM_OCTAVES);
 		noiseGenerator.SetFractalLacunarity(LACUNARITY);
 		noiseGenerator.SetFractalGain(PERSISTENCE);
@@ -152,37 +152,49 @@ public class Chunk
 			{
 				float worldX = worldStartX + x;
 				float worldZ = worldStartZ + z;
-				float noise = noiseGenerator.GetNoise(worldX, worldZ);
-				noise = (noise + 1.0f) / 2.0f;
-				int surfaceHeight = BASE_SEA_LEVEL + (int) (noise * HEIGHT_SCALE);
+
+				// Get the height from the noise generator
+				float noiseValue = noiseGenerator.GetNoise(worldX, worldZ);
+
+				// Remap noise from [-1, 1] to [0, 1]
+				noiseValue = (noiseValue + 1.0f) / 2.0f;
+
+				// Calculate the final surface height
+				int surfaceHeight = BASE_SEA_LEVEL + (int) (noiseValue * HEIGHT_SCALE);
+
+				// Clamp surface height to prevent generation outside chunk bounds if CHUNK_SIZE is small
+				surfaceHeight = Math.min(surfaceHeight, 400); // Assuming World.WORLD_HEIGHT exists
+				surfaceHeight = Math.max(surfaceHeight, BEDROCK_THICKNESS + GRASS_LAYER_THICKNESS + DIRT_LAYER_THICKNESS); // Ensure enough space for layers
 
 				for(int y = 0; y < CHUNK_SIZE; y++)
 				{
 					int worldY = worldStartY + y;
-					short blockType = BLOCK_AIR; // Default to air
+					short blockType = BLOCK_AIR;
 
-					if(worldY < BEDROCK_THICKNESS)
-					{
+					if (worldY < 1) { // Always bedrock at the very bottom of the world
 						blockType = BLOCK_BEDROCK;
-					}
-					else if(worldY < surfaceHeight - DIRT_LAYER_THICKNESS - GRASS_LAYER_THICKNESS)
-					{
+					} else if (worldY < surfaceHeight - DIRT_LAYER_THICKNESS - GRASS_LAYER_THICKNESS) {
 						blockType = BLOCK_STONE;
-					}
-					else if(worldY < surfaceHeight - GRASS_LAYER_THICKNESS)
-					{
+					} else if (worldY < surfaceHeight - GRASS_LAYER_THICKNESS) {
 						blockType = BLOCK_DIRT;
-					}
-					else if(worldY == surfaceHeight)
-					{
+					} else if (worldY == surfaceHeight) {
 						blockType = BLOCK_GRASS;
 					}
-					// Else, it remains BLOCK_AIR
+					// Optionally: Add water generation below BASE_SEA_LEVEL
+					else if (worldY < BASE_SEA_LEVEL && worldY < surfaceHeight) {
+						blockType = 7; // Assuming a water block ID
+					}
+
+					// Bedrock at the very bottom, regardless of noise
+					if (worldY <= BEDROCK_THICKNESS -1) { // Bottom N layers are bedrock
+						blockType = BLOCK_BEDROCK;
+					}
+
 
 					blocks[x][y][z] = blockType;
 					if(blockType != BLOCK_AIR)
 					{
-						this.isEmpty = false; // Only set to false if a non-air block is placed
+						this.isEmpty = false;
 					}
 				}
 			}

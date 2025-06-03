@@ -131,7 +131,7 @@ public class GameObject
 
 		for(Component component : components)
 		{
-			component.onUpdate();
+			component.update();
 		}
 		for(GameObject child : children)
 		{

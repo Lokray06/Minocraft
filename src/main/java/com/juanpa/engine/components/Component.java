@@ -1,15 +1,23 @@
 package com.juanpa.engine.components;
 
+import com.juanpa.engine.Debug;
+import com.juanpa.engine.Engine;
 import com.juanpa.engine.GameObject; // Will create this soon
+import com.juanpa.game.Game;
 
-public abstract class Component {
+public abstract class Component
+{
+	public static Game game = null;
 	protected GameObject gameObject; // The GameObject this component is attached to
 
-	public void setGameObject(GameObject gameObject) {
+	public void setGameObject(GameObject gameObject)
+	{
 		this.gameObject = gameObject;
+		Debug.log("Set the game object of this component to: " + gameObject.getName());
 	}
 
-	public GameObject getGameObject() {
+	public GameObject getGameObject()
+	{
 		return gameObject;
 	}
 
@@ -17,15 +25,18 @@ public abstract class Component {
 	 * Called when the component is first created and enabled.
 	 * Use this for initialization that depends on other components being ready.
 	 */
-	public void onStart() {
+	public void onStart()
+	{
 		// Default empty implementation
 	}
 
 	/**
 	 * Called once per frame.
+	 *
 	 * @param deltaTime The time in seconds since the last frame.
 	 */
-	public void onUpdate() {
+	public void update()
+	{
 		// Default empty implementation
 	}
 
@@ -33,7 +44,8 @@ public abstract class Component {
 	 * Called at fixed time intervals, primarily for physics updates.
 	 * Note: You'll need to set up a fixed timestep loop in your Game class for this.
 	 */
-	public void onFixedUpdate() {
+	public void onFixedUpdate()
+	{
 		// Default empty implementation
 	}
 
@@ -41,7 +53,8 @@ public abstract class Component {
 	 * Called when the component is about to be destroyed.
 	 * Use this for cleanup.
 	 */
-	public void onDestroy() {
+	public void onDestroy()
+	{
 		// Default empty implementation
 	}
 }

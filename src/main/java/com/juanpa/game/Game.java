@@ -29,9 +29,9 @@ public class Game
 	GameObject player;
 
 
-	public static int RENDER_DISTANCE_METERS = 500;
+	public static int RENDER_DISTANCE_METERS = 1000;
 	public static byte renderDistance = (byte) Math.ceil(RENDER_DISTANCE_METERS / CHUNK_SIZE);
-	public static long seed = 12345L;
+	public static long seed = (long)(Math.random()*1000);
 
 	public Game(int width, int height, String name)
 	{
@@ -46,6 +46,7 @@ public class Game
 		player = new GameObject("Player"); // Create a new GameObject
 		player.getTransform().position.set(8, 130, 40); // Set initial position on its Transform
 		player.addComponent(new PlayerController()); // Add the PlayerController component
+		PlayerController.game = this;
 		Camera playerCamera = new Camera();
 		player.addComponent(playerCamera); // Add the Camera component
 		gameObjects.add(player); // Add player GameObject to the scene graph

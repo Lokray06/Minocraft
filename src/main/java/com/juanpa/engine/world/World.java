@@ -33,6 +33,8 @@ public class World
 	public static final short BLOCK_TYPE_SOLID_ID = 1; // Example solid block ID
 	public static final short BLOCK_TYPE_GRASS_ID = 2; // Add this if not already in Chunk class
 	public static final short BLOCK_TYPE_STONE_ID = 3; // Add this if not already in Chunk class
+	public static final short BLOCK_TYPE_BEDROCK_ID = 4; // Add this if not already in Chunk class
+	public static final short BLOCK_TYPE_WATER_ID = 5; // Add this if not already in Chunk class
 
 	private static final int WORLD_MIN_BLOCK_Y = 0;
 	// Calculate based on Chunk.java's generation parameters:
